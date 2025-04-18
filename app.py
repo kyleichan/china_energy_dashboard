@@ -5,95 +5,117 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from dotenv import load_dotenv
 
-# Load API key from environment variables
+# Load API key
 load_dotenv()
 API_KEY = os.getenv("EMBER_API_KEY")
 
+# Base API settings
+base_url = "https://api.ember-energy.org"
+annual_endpoint = "/v1/electricity-generation/yearly"
+monthly_endpoint = "/v1/electricity-generation/monthly"
+carbon_intensity_endpoint = "/v1/carbon-intensity/yearly"
+
+# Common parameters for generation and carbon intensity
+gen_raw_params = {
+    "entity_code": "CHN",
+    "is_aggregate_series": "false",
+    "start_year": "2000",
+    "api_key": API_KEY
+}
+gen_agg_params = gen_raw_params.copy()
+gen_agg_params["is_aggregate_series"] = "true"
+ci_params = {"entity_code": "CHN", "start_year": "2000", "api_key": API_KEY}
+
+# Fetch aggregated annual generation for metrics
+df_agg = pd.DataFrame()
+resp_agg = requests.get(f"{base_url}{annual_endpoint}", params=gen_agg_params)
+if resp_agg.status_code == 200:
+    df_agg = pd.DataFrame(resp_agg.json().get("data", []))
+    if 'date' in df_agg.columns:
+        df_agg['year'] = pd.to_datetime(df_agg['date'], errors='coerce').dt.year
+
+# Fetch carbon intensity data
+df_ci = pd.DataFrame()
+resp_ci = requests.get(f"{base_url}{carbon_intensity_endpoint}", params=ci_params)
+if resp_ci.status_code == 200:
+    df_ci = pd.DataFrame(resp_ci.json().get("data", []))
+    if 'date' in df_ci.columns:
+        df_ci['year'] = pd.to_datetime(df_ci['date'], errors='coerce').dt.year
+
+# Fetch raw annual generation for charts
+df_ann_pivot = pd.DataFrame()
+resp_gen_raw = requests.get(f"{base_url}{annual_endpoint}", params=gen_raw_params)
+if resp_gen_raw.status_code == 200:
+    df_gen_raw = pd.DataFrame(resp_gen_raw.json().get("data", []))
+    if 'date' in df_gen_raw.columns:
+        df_gen_raw['year'] = pd.to_datetime(df_gen_raw['date'], errors='coerce').dt.year
+    series_col = next((c for c in ['fuel','source','series'] if c in df_gen_raw.columns), None)
+    if series_col:
+        df_ann_pivot = df_gen_raw.pivot_table(
+            index='year', columns=series_col, values='generation_twh'
+        ).sort_index()
+
+# Fetch raw monthly generation for charts
+df_mon_pivot = pd.DataFrame()
+resp_mon_raw = requests.get(f"{base_url}{monthly_endpoint}", params=gen_raw_params)
+if resp_mon_raw.status_code == 200:
+    df_mon_raw = pd.DataFrame(resp_mon_raw.json().get("data", []))
+    if {'year','month'}.issubset(df_mon_raw.columns):
+        df_mon_raw['date'] = pd.to_datetime(
+            dict(year=df_mon_raw['year'], month=df_mon_raw['month'], day=1)
+        )
+    elif 'date' in df_mon_raw.columns:
+        df_mon_raw['date'] = pd.to_datetime(df_mon_raw['date'], errors='coerce')
+    ser_mon = next((c for c in ['fuel','source','series'] if c in df_mon_raw.columns), None)
+    if ser_mon:
+        df_mon_pivot = df_mon_raw.pivot_table(
+            index='date', columns=ser_mon, values='generation_twh'
+        ).sort_index()
+
+# Streamlit layout
 st.title("China Energy Dashboard")
 st.markdown("Kyle Chan")
 
-st.subheader("China: Electricity Generation by Source (Monthly)")
-st.markdown("Data source: Ember")
+# Metrics for latest year
+if not df_agg.empty:
+    latest_year = int(df_agg['year'].max())
+    # Clean energy share
+    if 'share_of_generation_pct' in df_agg.columns:
+        clean = df_agg.loc[
+            (df_agg['year']==latest_year) & (df_agg['series'].str.lower()=='clean'),
+            'share_of_generation_pct'
+        ].iloc[0]
+        st.metric(label=f"Clean Energy Share {latest_year}", value=f"{clean:.1f}%")
+    # Carbon intensity
+    if not df_ci.empty:
+        ci_col = next(c for c in df_ci.columns if 'intensity' in c.lower() and 'share' not in c.lower())
+        ci = df_ci.loc[df_ci['year']==latest_year, ci_col].iloc[0]
+        st.metric(label=f"Carbon Intensity {latest_year}", value=f"{ci:.1f} gCO₂/kWh")
 
-# Request monthly electricity generation data for China
-base_url = "https://api.ember-energy.org"
-endpoint = "/v1/electricity-generation/monthly"
-params = {
-    "entity_code": "CHN",
-    "is_aggregate_series": "false",
-    "start_date": "2000-01",
-    "api_key": API_KEY
-}
-response = requests.get(f"{base_url}{endpoint}", params=params)
+# Annual generation chart
+st.subheader("Electricity Generation by Source (Annual)")
+st.markdown("Data: Ember")
+if not df_ann_pivot.empty:
+    st.line_chart(df_ann_pivot)
+    latest = df_ann_pivot.iloc[-1].dropna()
+    latest_pos = latest[latest > 0]
+    if not latest_pos.empty:
+        fig, ax = plt.subplots()
+        ax.pie(latest_pos, labels=latest_pos.index, autopct='%1.1f%%', startangle=90)
+        ax.axis('equal')
+        ax.set_title(f"Generation Share {latest_year}")
+        st.pyplot(fig)
 
-if response.status_code == 200:
-    data = response.json().get("data", [])
-    df = pd.DataFrame(data)
+# Monthly generation chart
+st.subheader("Electricity Generation by Source (Monthly)")
 
-    if df.empty:
-        st.write("No data returned from API.")
-    else:
-        # Construct a datetime index for monthly data
-        if {'year', 'month'}.issubset(df.columns):
-            df['date'] = pd.to_datetime(dict(year=df['year'], month=df['month'], day=1))
-        elif 'date' in df.columns:
-            df['date'] = pd.to_datetime(df['date'], errors='coerce')
-        else:
-            st.write(f"Cannot find columns to parse date: {df.columns.tolist()}")
-            st.stop()
-
-        # Identify series column
-        series_col = next((col for col in ['fuel', 'source', 'series'] if col in df.columns), None)
-        if not series_col:
-            st.write(f"No series column found: {df.columns.tolist()}")
-            st.stop()
-
-        # Pivot to wide format: each fuel as a column
-        df_pivot = df.pivot_table(
-            index='date',
-            columns=series_col,
-            values='generation_twh'
-        ).sort_index()
-
-        # Plot all fuel series over time
-        st.line_chart(df_pivot)
-
-        # Pie chart for the latest month: filter out non-positive values
-        latest = df_pivot.iloc[-1].dropna()
-        latest = latest[latest > 0]
-        if not latest.empty:
-            fig, ax = plt.subplots()
-            ax.pie(latest, labels=latest.index, autopct='%1.1f%%', startangle=90)
-            ax.axis('equal')
-            latest_date = latest.name.strftime('%Y-%m')
-            ax.set_title(f"Share of Generation by Source for {latest_date}")
-            st.pyplot(fig)
-        else:
-            st.write("No positive generation data available for the latest month to plot pie chart.")
-
-        # Pie chart for the year 2024: sum monthly generation by source
-        df['year'] = df['date'].dt.year
-        annual_2024 = df[df['year'] == 2024]
-        if not annual_2024.empty:
-            annual_pivot = annual_2024.pivot_table(
-                index=None,
-                columns=series_col,
-                values='generation_twh',
-                aggfunc='sum'
-            )
-            annual = annual_pivot.iloc[0].dropna()
-            annual = annual[annual > 0]
-            if not annual.empty:
-                fig2, ax2 = plt.subplots()
-                ax2.pie(annual, labels=annual.index, autopct='%1.1f%%', startangle=90)
-                ax2.axis('equal')
-                ax2.set_title("Share of Generation by Source for 2024")
-                st.pyplot(fig2)
-            else:
-                st.write("No positive generation data available for 2024 to plot pie chart.")
-        else:
-            st.write("No data available for 2024 to plot annual pie chart.")
-else:
-    st.error(f"Error fetching data: {response.status_code}")
-
-
+if not df_mon_pivot.empty:
+    st.line_chart(df_mon_pivot)
+    latest_m = df_mon_pivot.iloc[-1].dropna()
+    latest_m_pos = latest_m[latest_m > 0]
+    if not latest_m_pos.empty:
+        figm, axm = plt.subplots()
+        axm.pie(latest_m_pos, labels=latest_m_pos.index, autopct='%1.1f%%', startangle=90)
+        axm.axis('equal')
+        axm.set_title(f"Generation Share {df_mon_pivot.index[-1].strftime('%Y-%m')}")
+        st.pyplot(figm)
