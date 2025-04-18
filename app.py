@@ -2,10 +2,8 @@ import os
 import streamlit as st
 import requests
 import pandas as pd
-from dotenv import load_dotenv
 
 # Load API key from environment variables
-load_dotenv()
 API_KEY = os.getenv("EMBER_API_KEY")
 
 st.title("China: Electricity Generation by Source (Monthly)")
