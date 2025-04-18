@@ -9,8 +9,11 @@ from dotenv import load_dotenv
 load_dotenv()
 API_KEY = os.getenv("EMBER_API_KEY")
 
-st.title("China: Electricity Generation by Source (Monthly)")
-st.write("Data source: Ember")
+st.title("China Energy Dashboard")
+st.markdown("Kyle Chan")
+
+st.header("China: Electricity Generation by Source (Monthly)")
+st.markdown("Data source: Ember")
 
 # Request monthly electricity generation data for China
 base_url = "https://api.ember-energy.org"
