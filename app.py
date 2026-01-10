@@ -13,7 +13,7 @@ API_KEY = os.getenv("EMBER_API_KEY")
 
 # Page config
 st.set_page_config(
-    page_title="China Clean Energy Tracker",
+    page_title="China Energy Dashboard",
     page_icon="⚡",
     layout="wide"
 )
@@ -21,23 +21,36 @@ st.set_page_config(
 # Custom CSS for better styling
 st.markdown("""
 <style>
+    /* Reduce top padding */
+    .block-container {
+        padding-top: 1rem !important;
+    }
     .main-header {
-        font-size: 3rem;
+        font-size: 3.5rem;
         font-weight: 700;
         color: #1E3A5F;
         margin-bottom: 0;
     }
     .sub-header {
-        font-size: 1.2rem;
+        font-size: 1.7rem;
         color: #6B7280;
         margin-top: 0;
+        margin-bottom: 0.5rem;
     }
     .section-header {
-        font-size: 1.8rem;
+        font-size: 2.5rem;
         font-weight: 600;
         color: #1E3A5F;
-        margin-top: 2rem;
-        margin-bottom: 1rem;
+        margin-top: 1.5rem;
+        margin-bottom: 0.5rem;
+    }
+    /* Reduce spacing between elements */
+    .stRadio {
+        margin-bottom: 0 !important;
+    }
+    h1 {
+        margin-bottom: 0 !important;
+        padding-bottom: 0 !important;
     }
     .stMetric {
         background-color: #f8fafc;
@@ -46,18 +59,33 @@ st.markdown("""
         border: 1px solid #e2e8f0;
     }
     .stMetric label {
-        font-size: 1rem !important;
+        font-size: 1.4rem !important;
         color: #64748b !important;
     }
     .stMetric [data-testid="stMetricValue"] {
-        font-size: 2rem !important;
+        font-size: 2.3rem !important;
         color: #1e293b !important;
     }
     .stMetric [data-testid="stMetricDelta"] {
-        font-size: 1rem !important;
+        font-size: 1.3rem !important;
     }
-    p, li {
-        font-size: 1.1rem;
+    p, li, span {
+        font-size: 1.5rem;
+    }
+    /* Radio buttons */
+    .stRadio label {
+        font-size: 1.4rem !important;
+    }
+    .stRadio div[role="radiogroup"] label {
+        font-size: 1.3rem !important;
+    }
+    /* Markdown text */
+    .stMarkdown {
+        font-size: 1.5rem;
+    }
+    /* Bold text labels */
+    strong, b {
+        font-size: 1.5rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -80,9 +108,22 @@ CLEAN_SOURCES = ['Solar', 'Wind', 'Hydro', 'Nuclear', 'Bioenergy', 'Other renewa
 FOSSIL_SOURCES = ['Coal', 'Gas', 'Oil', 'Other fossil']
 
 # Header
-st.markdown('<p class="main-header">China Clean Energy Tracker</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-header">Monthly electricity generation by source · Data from Ember</p>', unsafe_allow_html=True)
-st.markdown("---")
+st.title("China Energy Dashboard")
+col_author, col_toggle = st.columns([2, 1])
+with col_author:
+    st.markdown("*Created by Kyle Chan*")
+with col_toggle:
+    time_resolution = st.radio(
+        "Data Resolution",
+        ["Monthly", "Yearly"],
+        horizontal=True,
+        label_visibility="collapsed"
+    )
+
+if time_resolution == "Monthly":
+    st.caption("Monthly electricity generation by source · Data from Ember")
+else:
+    st.caption("Yearly electricity generation by source · Data from Ember")
 
 # Fetch data
 @st.cache_data(ttl=3600)
@@ -122,6 +163,17 @@ if data:
             values='generation_twh'
         ).sort_index()
 
+        # Aggregate to yearly if selected
+        if time_resolution == "Yearly":
+            df_pivot = df_pivot.resample('YE').sum()
+            # Exclude the current incomplete year
+            latest_month = df['date'].max()
+            if latest_month.month < 12:
+                df_pivot = df_pivot[df_pivot.index.year < latest_month.year]
+
+        # Date format for hover templates
+        date_fmt = "%b %Y" if time_resolution == "Monthly" else "%Y"
+
         # Calculate clean vs fossil
         clean_cols = [c for c in df_pivot.columns if c in CLEAN_SOURCES]
         fossil_cols = [c for c in df_pivot.columns if c in FOSSIL_SOURCES]
@@ -146,20 +198,20 @@ if data:
         col1, col2, col3, col4 = st.columns(4)
 
         with col1:
-            clean_pct = latest['Clean %']
-            delta = f"+{clean_pct - year_ago['Clean %']:.1f}pp" if year_ago is not None else None
-            st.metric(
-                label="Clean Energy Share",
-                value=f"{clean_pct:.1f}%",
-                delta=delta
-            )
-
-        with col2:
             total_gen = latest['Total']
             delta = f"{((total_gen / year_ago['Total']) - 1) * 100:.1f}%" if year_ago is not None else None
             st.metric(
                 label="Total Generation",
                 value=f"{total_gen:.0f} TWh",
+                delta=delta
+            )
+
+        with col2:
+            clean_pct = latest['Clean %']
+            delta = f"+{clean_pct - year_ago['Clean %']:.1f}pp" if year_ago is not None else None
+            st.metric(
+                label="Clean Energy Share",
+                value=f"{clean_pct:.1f}%",
                 delta=delta
             )
 
@@ -181,12 +233,23 @@ if data:
                 delta=wind_yoy
             )
 
-        st.markdown(f"*Latest data: {latest_date.strftime('%B %Y')}*")
+        if time_resolution == "Monthly":
+            st.markdown(f"*Latest data: {latest_date.strftime('%B %Y')}*")
+        else:
+            st.markdown(f"*Latest data: {latest_date.strftime('%Y')}*")
 
         # ===================
         # GENERATION BY SOURCE
         # ===================
-        st.markdown('<p class="section-header">Generation by Source</p>', unsafe_allow_html=True)
+        st.markdown("**Generation by Source**")
+
+        # Toggle between absolute and percent
+        gen_display = st.radio(
+            "Display",
+            ["TWh", "Percent"],
+            horizontal=True,
+            key="gen_display"
+        )
 
         col1, col2 = st.columns([2, 1])
 
@@ -195,34 +258,45 @@ if data:
             source_totals = df_pivot[source_cols].sum().sort_values(ascending=False)
             ordered_sources = source_totals.index.tolist()
 
+            # Calculate percent if needed
+            if gen_display == "Percent":
+                row_totals = df_pivot[source_cols].sum(axis=1)
+                chart_data = df_pivot[source_cols].div(row_totals, axis=0) * 100
+            else:
+                chart_data = df_pivot[source_cols]
+
             fig = go.Figure()
-            for source in reversed(ordered_sources):  # Reverse for proper stacking order
+            for source in ordered_sources:  # Largest source at bottom
+                if gen_display == "Percent":
+                    hover_template = f'<b>{source}</b><br>%{{x|{date_fmt}}}<br>%{{y:.1f}}%<extra></extra>'
+                else:
+                    hover_template = f'<b>{source}</b><br>%{{x|{date_fmt}}}<br>%{{y:.1f}} TWh<extra></extra>'
                 fig.add_trace(go.Scatter(
-                    x=df_pivot.index,
-                    y=df_pivot[source],
+                    x=chart_data.index,
+                    y=chart_data[source],
                     name=source,
                     mode='lines',
                     stackgroup='one',
                     line=dict(width=0.5, color=SOURCE_COLORS.get(source, '#999999')),
                     fillcolor=SOURCE_COLORS.get(source, '#999999'),
-                    hovertemplate=f'<b>{source}</b><br>%{{x|%b %Y}}<br>%{{y:.1f}} TWh<extra></extra>'
+                    hovertemplate=hover_template
                 ))
 
             fig.update_layout(
                 height=500,
                 margin=dict(l=0, r=0, t=10, b=0),
                 xaxis_title='',
-                yaxis_title='Generation (TWh)',
+                yaxis_title='Share (%)' if gen_display == "Percent" else 'Generation (TWh)',
                 legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='left', x=0),
                 hovermode='closest',
                 plot_bgcolor='#fafafa',
                 paper_bgcolor='#fafafa',
-                font=dict(size=14)
+                font=dict(size=20)
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True, 'toImageButtonOptions': {'format': 'png', 'scale': 2}})
 
         with col2:
-            st.markdown("**Latest Month Mix**")
+            st.markdown(f"**Latest {'Month' if time_resolution == 'Monthly' else 'Year'} Mix**")
 
             pie_data = latest[source_cols].dropna()
             pie_data = pie_data[pie_data > 0].sort_values(ascending=False)
@@ -232,7 +306,7 @@ if data:
                 values=pie_data.values,
                 marker_colors=[SOURCE_COLORS.get(s, '#999999') for s in pie_data.index],
                 textinfo='label+percent',
-                textfont_size=12,
+                textfont_size=16,
                 hovertemplate='<b>%{label}</b><br>%{value:.1f} TWh<br>%{percent}<extra></extra>'
             )])
 
@@ -242,7 +316,7 @@ if data:
                 showlegend=False,
                 paper_bgcolor='#fafafa'
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True, 'toImageButtonOptions': {'format': 'png', 'scale': 2}})
 
         # ===================
         # CLEAN ENERGY
@@ -264,7 +338,7 @@ if data:
                     stackgroup='one',
                     line=dict(width=0.5, color=SOURCE_COLORS.get(source, '#999999')),
                     fillcolor=SOURCE_COLORS.get(source, '#999999'),
-                    hovertemplate=f'<b>{source}</b><br>%{{x|%b %Y}}<br>%{{y:.1f}} TWh<extra></extra>'
+                    hovertemplate=f'<b>{source}</b><br>%{{x|{date_fmt}}}<br>%{{y:.1f}} TWh<extra></extra>'
                 ))
 
             fig.update_layout(
@@ -276,9 +350,9 @@ if data:
                 hovermode='closest',
                 plot_bgcolor='#fafafa',
                 paper_bgcolor='#fafafa',
-                font=dict(size=14)
+                font=dict(size=20)
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True, 'toImageButtonOptions': {'format': 'png', 'scale': 2}})
 
         with col2:
             st.markdown("**Clean Energy Share of Total**")
@@ -302,9 +376,9 @@ if data:
                 hovermode='closest',
                 plot_bgcolor='#fafafa',
                 paper_bgcolor='#fafafa',
-                font=dict(size=14)
+                font=dict(size=20)
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True, 'toImageButtonOptions': {'format': 'png', 'scale': 2}})
 
         # Clean vs Fossil
         st.markdown("**Clean vs Fossil Fuels**")
@@ -336,9 +410,9 @@ if data:
             hovermode='closest',
             plot_bgcolor='#fafafa',
             paper_bgcolor='#fafafa',
-            font=dict(size=14)
+            font=dict(size=20)
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True, 'toImageButtonOptions': {'format': 'png', 'scale': 2}})
 
         # ===================
         # GROWTH TRENDS
@@ -346,7 +420,8 @@ if data:
         st.markdown('<p class="section-header">Growth Trends</p>', unsafe_allow_html=True)
 
         # Calculate YoY growth for each source
-        df_yoy = df_pivot[source_cols].pct_change(periods=12) * 100
+        yoy_periods = 12 if time_resolution == "Monthly" else 1
+        df_yoy = df_pivot[source_cols].pct_change(periods=yoy_periods) * 100
 
         # Latest YoY growth
         latest_yoy = df_yoy.iloc[-1].dropna().sort_values(ascending=True)
@@ -354,7 +429,8 @@ if data:
         col1, col2 = st.columns(2)
 
         with col1:
-            st.markdown(f"**Year-over-Year Growth by Source** ({latest_date.strftime('%B %Y')})")
+            date_label = latest_date.strftime('%B %Y') if time_resolution == "Monthly" else latest_date.strftime('%Y')
+            st.markdown(f"**Year-over-Year Growth by Source** ({date_label})")
 
             colors = ['#10B981' if v > 0 else '#EF4444' for v in latest_yoy.values]
 
@@ -375,10 +451,10 @@ if data:
                 yaxis_title='',
                 plot_bgcolor='#fafafa',
                 paper_bgcolor='#fafafa',
-                font=dict(size=14)
+                font=dict(size=20)
             )
             fig.add_vline(x=0, line_color='#374151', line_width=1)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True, 'toImageButtonOptions': {'format': 'png', 'scale': 2}})
 
         with col2:
             st.markdown("**Solar & Wind Growth Trends**")
@@ -412,10 +488,10 @@ if data:
                 hovermode='closest',
                 plot_bgcolor='#fafafa',
                 paper_bgcolor='#fafafa',
-                font=dict(size=14)
+                font=dict(size=20)
             )
             fig.add_hline(y=0, line_color='#374151', line_width=1, line_dash='dash')
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': True, 'toImageButtonOptions': {'format': 'png', 'scale': 2}})
 
 else:
     st.error("Failed to fetch data from Ember API. Please check your API key.")
